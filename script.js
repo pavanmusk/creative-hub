@@ -50,13 +50,12 @@ const appConfig = {
   assets: {
     // Add licensed PNG paths here to replace the built-in original mascot poses.
     mascotPngs: {
-      // Replace blank values with PNG paths you own or are licensed to use.
-      welcome: "",
-      question: "",
-      story: "",
-      magic: "",
-      letter: "",
-      celebrate: ""
+      welcome: "img2.png",
+      question: "img2.png",
+      story: "img2.png",
+      magic: "img2.png",
+      letter: "img2.png",
+      celebrate: "img2.png"
     }
   }
 };
@@ -76,6 +75,7 @@ const appState = {
   mascotTimer: null,
   mascotBubbleTimer: null,
   mascotReactionTimer: null,
+  motionPreference: null,
   mascotMode: "mascot-waving",
   letterOpen: false,
   initialized: false
@@ -111,6 +111,9 @@ const screenTemplates = {
         <p class="eyebrow">A little question for us</p>
         <h2>${escapeHtml(question.prompt)}</h2>
         <p class="question-progress" aria-live="polite">Question ${index + 1} of ${appConfig.questions.length}</p>
+        <div class="question-step-track" role="progressbar" aria-label="Question progress" aria-valuemin="1" aria-valuemax="${appConfig.questions.length}" aria-valuenow="${index + 1}" aria-valuetext="Question ${index + 1} of ${appConfig.questions.length}">
+          <span style="width:${((index + 1) / appConfig.questions.length) * 100}%"></span>
+        </div>
         <div class="choice-grid question-choices">
           ${question.answers.map((answer, answerIndex) => `
             <button class="choice-card" type="button" data-action="choose-answer" data-choice="${answerIndex}" aria-pressed="${selected === answerIndex}">
@@ -209,6 +212,21 @@ function escapeHtml(value) {
   })[character]);
 }
 
+function handleMotionPreferenceChange(event) {
+  if (event.matches) {
+    window.clearInterval(appState.mascotTimer);
+    appState.mascotTimer = null;
+  } else {
+    startMascotMotion();
+  }
+
+  const activeScreen = document.querySelector("#screen-root > .screen.active");
+  if (activeScreen) {
+    cleanupCurrentScreen();
+    setupScreenEffects(appState.currentScreen, activeScreen, { triggerFinalCelebration: false });
+  }
+}
+
 function createHeartField() {
   return Array.from({ length: 18 }, (_, index) => {
     const size = 10 + ((index % 5) * 7);
@@ -259,13 +277,16 @@ function updateMascotPose(screenName) {
     final: "celebrate"
   };
   const action = actionByScreen[screenName] || "welcome";
-  const imageSource = appConfig.assets.mascotPngs[action] || mascotArtwork(action);
+  const providedMascot = appConfig.assets.mascotPngs[action];
+  const imageSource = providedMascot || mascotArtwork(action);
   const sharedImage = document.getElementById("shared-mascot-image");
   if (sharedImage) {
     sharedImage.dataset.pose = action;
     sharedImage.dataset.fallbackApplied = "false";
     sharedImage.src = imageSource;
-    sharedImage.alt = `Original blue pocket friend ${action === "welcome" ? "waving hello" : action === "question" ? "sharing hearts" : action === "story" ? "holding a star" : action === "magic" ? "making a little magic" : action === "letter" ? "holding a love letter" : "celebrating with hearts"}`;
+    sharedImage.alt = providedMascot
+      ? "Doraemon waving"
+      : `Original blue pocket friend ${action === "welcome" ? "waving hello" : action === "question" ? "sharing hearts" : action === "story" ? "holding a star" : action === "magic" ? "making a little magic" : action === "letter" ? "holding a love letter" : "celebrating with hearts"}`;
   }
 
   const stage = document.getElementById("mascot-stage");
@@ -299,7 +320,7 @@ function showMascotBubble(message) {
 
 function setMascotMode(mode) {
   const stage = document.getElementById("mascot-stage");
-  if (!stage) {
+  if (!stage || stage.classList.contains(mode)) {
     return;
   }
   stage.classList.remove("mascot-flying", "mascot-running", "mascot-waving", "mascot-celebrating", "mascot-reacting");
@@ -375,7 +396,7 @@ function updateProgress(screenName) {
   progress.setAttribute("aria-valuetext", `Step ${currentStep} of ${appState.screenOrder.length}: ${label}`);
   fill.style.width = `${(currentStep / appState.screenOrder.length) * 100}%`;
   announcement.textContent = `Step ${currentStep} of ${appState.screenOrder.length}: ${label}`;
-  backButton.disabled = appState.visitedScreens.length < 2 || appState.navigationLocked;
+  backButton.disabled = (appState.visitedScreens.length < 2 && currentIndex === 0) || appState.navigationLocked;
 }
 
 function cleanupCurrentScreen() {
@@ -385,7 +406,42 @@ function cleanupCurrentScreen() {
   }
 }
 
-function setupScreenEffects(screenName, screen) {
+function addScreenCleanup(cleanup) {
+  const previousCleanup = appState.screenCleanup;
+  appState.screenCleanup = () => {
+    previousCleanup?.();
+    cleanup();
+  };
+}
+
+function triggerHeartBurst(screen, className) {
+  if (!screen || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    return;
+  }
+  const burst = document.createElement("div");
+  burst.className = `heart-burst ${className}`;
+  burst.setAttribute("aria-hidden", "true");
+  const heartCount = className === "final-heart-burst" ? 22 : 12;
+  for (let index = 0; index < heartCount; index += 1) {
+    const heart = document.createElement("span");
+    const angle = (Math.PI * 2 * index) / heartCount;
+    const distance = 70 + (index % 4) * 28;
+    heart.className = "burst-heart";
+    heart.style.setProperty("--burst-x", `${Math.cos(angle) * distance}px`);
+    heart.style.setProperty("--burst-y", `${Math.sin(angle) * distance}px`);
+    heart.style.setProperty("--burst-delay", `${(index % 5) * 35}ms`);
+    burst.appendChild(heart);
+  }
+  screen.appendChild(burst);
+
+  const timer = window.setTimeout(() => burst.remove(), 1500);
+  addScreenCleanup(() => {
+    window.clearTimeout(timer);
+    burst.remove();
+  });
+}
+
+function setupScreenEffects(screenName, screen, { triggerFinalCelebration = true } = {}) {
   const cleanups = [];
   const typewriter = screen.querySelector("[data-typewriter]");
   if (typewriter) {
@@ -417,6 +473,9 @@ function setupScreenEffects(screenName, screen) {
   }
 
   appState.screenCleanup = () => cleanups.forEach((cleanup) => cleanup());
+  if (screenName === "final" && triggerFinalCelebration) {
+    triggerHeartBurst(screen, "final-heart-burst");
+  }
 }
 
 function renderQuestionStep() {
@@ -425,9 +484,17 @@ function renderQuestionStep() {
     return;
   }
   cleanupCurrentScreen();
+  const activeAction = document.activeElement?.dataset.action;
   activeScreen.innerHTML = screenTemplates.question();
   activeScreen.scrollTop = 0;
   updateMascotPose("question");
+  const focusTarget = activeAction === "choose-answer"
+    ? activeScreen.querySelector(".choice-card[aria-pressed='true']")
+    : activeScreen.querySelector("h2");
+  if (focusTarget?.tagName === "H2") {
+    focusTarget.tabIndex = -1;
+  }
+  focusTarget?.focus({ preventScroll: true });
 }
 
 function renderScreen(screenName, { direction = "forward" } = {}) {
@@ -574,6 +641,11 @@ function handleDocumentClick(event) {
     case "go-back":
       if (appState.visitedScreens.length > 1) {
         window.history.back();
+      } else {
+        const currentIndex = appState.screenOrder.indexOf(appState.currentScreen);
+        if (currentIndex > 0) {
+          navigateTo(appState.screenOrder[currentIndex - 1]);
+        }
       }
       break;
     case "start-journey":
@@ -582,10 +654,18 @@ function handleDocumentClick(event) {
       navigateTo("question");
       break;
     case "choose-answer":
-      appState.answers[`question-${appState.questionIndex}`] = Number(target.dataset.choice);
-      appState.questionFeedback = appConfig.questions[appState.questionIndex].feedback[Number(target.dataset.choice)];
+      {
+        const question = appConfig.questions[appState.questionIndex];
+        const selectedAnswer = Number(target.dataset.choice);
+        if (!question || !Number.isInteger(selectedAnswer) || selectedAnswer < 0 || selectedAnswer >= question.answers.length) {
+          break;
+        }
+        appState.answers[`question-${appState.questionIndex}`] = selectedAnswer;
+        appState.questionFeedback = question.feedback[selectedAnswer];
+      }
       renderQuestionStep();
       setMascotMode("mascot-reacting");
+      showMascotBubble(appState.questionFeedback);
       window.clearTimeout(appState.mascotReactionTimer);
       appState.mascotReactionTimer = window.setTimeout(() => {
         if (appState.currentScreen !== "final") {
@@ -631,6 +711,7 @@ function handleDocumentClick(event) {
         letterContent.removeAttribute("inert");
         letterContent.setAttribute("aria-hidden", "false");
       }
+      triggerHeartBurst(document.querySelector("#screen-root > .screen.active"), "letter-heart-burst");
       const hint = document.querySelector("[data-envelope-hint]");
       if (hint) {
         hint.textContent = appState.letterOpen ? "All my love, tucked inside." : "Tap the envelope to open your letter.";
@@ -667,7 +748,9 @@ function handleMascotImageError(event) {
     return;
   }
   image.dataset.fallbackApplied = "true";
-  image.src = mascotArtwork(image.dataset.pose || "welcome");
+  const action = image.dataset.pose || "welcome";
+  image.src = mascotArtwork(action);
+  image.alt = `Original blue pocket friend ${action === "welcome" ? "waving hello" : action === "question" ? "sharing hearts" : action === "story" ? "holding a star" : action === "magic" ? "making a little magic" : action === "letter" ? "holding a love letter" : "celebrating with hearts"}`;
 }
 
 function initializeApp() {
@@ -703,6 +786,8 @@ function initializeApp() {
   document.addEventListener("click", handleDocumentClick);
   document.addEventListener("input", handleDocumentInput);
   window.addEventListener("popstate", handlePopState);
+  appState.motionPreference = window.matchMedia("(prefers-reduced-motion: reduce)");
+  appState.motionPreference.addEventListener("change", handleMotionPreferenceChange);
   startMascotMotion();
 }
 
